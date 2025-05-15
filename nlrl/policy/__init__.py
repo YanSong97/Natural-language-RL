@@ -21,14 +21,17 @@ def get_policy(policy_config):
             model_path=policy_config.model_path,
             sample_config=policy_config.llm_config,
             epsilon_greedy=policy_config.epsilon_greedy,
+            env_config=policy_config.env_config,
+            model_tp_size=policy_config.model_tp_size,
             # remote=remote,
+            # vllm_generate_mini_bz=policy_config.vllm_generate_mini_bz
         )
     elif policy_config.policy_name == "LLM_PPO":
 
         if "policy" in policy_config.model_path.lower():
             policy = PPOLLMAgent(
                 model_path=policy_config.model_path,
-                env_config=EnvConfig(env_name="TicTacToeEnv"),
+                env_config=EnvConfig(env_name=policy_config.env_config.env_name),
                 epsilon_greedy=policy_config.epsilon_greedy,
                 temperature=policy_config.llm_config.temperature,
             )
@@ -41,19 +44,26 @@ def get_policy(policy_config):
         else:
             policy = PPOLLMAgent(
                 model_path=policy_config.model_path,
-                env_config=EnvConfig(env_name="TicTacToeEnv"),
+                env_config=EnvConfig(env_name=policy_config.env_config.env_name),
                 epsilon_greedy=policy_config.epsilon_greedy,
                 temperature=policy_config.llm_config.temperature,
             )
-            return policy
+        return policy
     else:
         return functools.partial(
             POLICY_DICT[policy_config.policy_name], policy_config=policy_config
         )
 
 
-def random_policy(state, policy_config):
+def random_policy(state, policy_config, available_actions_list=None):
     import random
+    # print(f"available action list = {available_actions_list}")
+    if available_actions_list is not None:
+        out_a = []
+        for i in available_actions_list:
+            out_a.append(random.choice(i))
+
+        return out_a
 
     env = get_env(policy_config.env_config)
     actions = []

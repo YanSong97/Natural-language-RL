@@ -4,9 +4,6 @@ import torch.nn as nn
 from torch.distributions import Categorical
 import numpy as np
 from nlrl.envs import get_env
-from nlrl.envs.tictactoe.prompt import (
-    POLICY_prompt,
-)
 from nlrl.config import EnvConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import os
@@ -102,6 +99,12 @@ class PPOLLMAgent(nn.Module):
         self.n_iterations = n_iterations
         self._eps_greedy = epsilon_greedy
 
+        if env_config.env_name=="TicTacToeEnv":
+            from nlrl.envs.tictactoe.prompt import POLICY_prompt
+        elif env_config.env_name=="FrozenLakeEnv":
+            from nlrl.envs.frozen_lake.prompt import POLICY_prompt
+        else:
+            raise NotImplementedError
         self.select_action_prompter = POLICY_prompt()
         print("Initialization completed.")
 

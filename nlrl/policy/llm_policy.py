@@ -3,7 +3,6 @@ from typing import Optional
 
 from regex import F
 import vllm
-from nlrl.envs.tictactoe.prompt import POLICY_prompt
 from nlrl.llm_call import vllm_model
 from nlrl.config import LLMSamplingParams
 import numpy as np
@@ -17,9 +16,11 @@ class Agent:
         self,
         model_path,
         sample_config,
+        env_config,
         model_tp_size=None,
         remote=False,
         epsilon_greedy: Optional[float] = None,
+        vllm_generate_mini_bz=None
     ):
         self.model_path = model_path
         self.remote = remote
@@ -48,12 +49,20 @@ class Agent:
                 tensor_parallel_size=model_tp_size,
             )
             # self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        if env_config.env_name=="TicTacToeEnv":
+            from nlrl.envs.tictactoe.prompt import POLICY_prompt
+        elif env_config.env_name=="FrozenLakeEnv":
+            from nlrl.envs.frozen_lake.prompt import POLICY_prompt
+        else:
+            raise NotImplementedError
         self.select_action_prompter = POLICY_prompt()
+
         if epsilon_greedy is not None and epsilon_greedy <= 0:
             epsilon_greedy = None
         self._eps_greedy = epsilon_greedy
         assert self._eps_greedy is None or 1 > self._eps_greedy > 0
         self.is_ppo = False
+        self.vllm_generate_mini_bz=vllm_generate_mini_bz
 
     def get_prompt(self, state):
         response_type = "LLM"  # This will give us the GPT format
@@ -68,7 +77,7 @@ class Agent:
                 response_text = response.choices[0].message.content.strip()
                 result = response_text.split("""\"best_move\": """)[1].split("}")[0].strip()
 
-            result = int(result) - 1
+            result = int(result) - 1        # the action should be index
 
             assert (
                 result in available_actions
@@ -162,7 +171,7 @@ class Agent:
 
         return move_logprobs
 
-    def get_batch_action(self, state_list):
+    def get_batch_action(self, state_list, available_actions_list=None, return_cot = False):
         random_eps = np.random.random(len(state_list))
         prompt_list = [self.get_prompt(state) for state in state_list]
         assert len(prompt_list) == len(state_list)
@@ -192,7 +201,7 @@ class Agent:
                         max_tokens=self.sample_config.max_tokens,
                         top_p=self.sample_config.top_p,
                     )
-                    responses.append(response)
+                    responses.append(response.choices[0].message.content)
                 except Exception as e:
                     print(f"Error in API call: {e}")
                     responses.append(None)
@@ -259,7 +268,7 @@ class Agent:
                 responses = [response_map[i] for i in range(len(state_list))]
 
         elif not self.remote:
-            outputs, _ = self.model.generate(prompt_list)
+            outputs, _ = self.model.generate(prompt_list, vllm_generate_mini_bz=self.vllm_generate_mini_bz)
             responses = [output[-1]["content"] for output in outputs]
 
         else:
@@ -273,9 +282,12 @@ class Agent:
         #     responses.append((output[-1]["content"]))
 
         actions = []
-        available_actions_list = [
-            [i for i in range(9) if state[0][i] == 0] for state in state_list
-        ]
+        if available_actions_list is None:
+            # default action list for Tic-Tac-Toe
+            available_actions_list = [
+                [i for i in range(9) if state[0][i] == 0] for state in state_list
+            ]
+
         if self.is_ppo:
             for i, available_actions in enumerate(available_actions_list):
                 result = int(responses[i])
@@ -298,10 +310,14 @@ class Agent:
                 f"Mismatch in processed responses: "
                 f"processed {llm_i} but have {len(responses)} responses"
             )
-        # print(f"actions: {actions}")
+        print(f"actions: {actions}")
+
+        if return_cot:
+            return actions, responses
+
         return actions
 
-    def __call__(self, state):
+    def __call__(self, state, available_actions_list=None, return_cot=False):
         if isinstance(state, list):
-            return self.get_batch_action(state)
+            return self.get_batch_action(state, available_actions_list, return_cot)
         return self.get_action(state)

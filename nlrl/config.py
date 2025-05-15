@@ -16,6 +16,7 @@ class EnvConfig:
     env_name: str = "TicTacToeEnv"
     batch_sample: bool = False
     batch_sample_size: int = 64
+    is_slippery: bool = True            # for frozenlake
 
 
 @dataclass(kw_only=True)
@@ -35,6 +36,8 @@ class PolicyConfig:
     env_config: EnvConfig = None
     llm_config: LLMSamplingParams = None
     epsilon_greedy: Optional[float] = None
+    vllm_generate_mini_bz: int=None
+    model_tp_size: int=1
 
 
 @dataclass(kw_only=True)

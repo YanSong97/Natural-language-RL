@@ -8,28 +8,41 @@ import matplotlib.pyplot as plt
 
 
 def reward(traj):
-    if traj["turn"][0]:  # play as O
-        return traj["reward"][-1]
+    if len(traj["turn"]) > 0:       # multi-turn game
+        if traj["turn"][0]:  # play as O
+            return traj["reward"][-1]
+        else:
+            return -traj["reward"][-1]
     else:
-        return -traj["reward"][-1]
+        # single-turn game
+        return traj["reward"][-1]   # final reward
 
 
 def win_rate(traj):
-    if traj["turn"][0]:  # play as O
-        return traj["reward"][-1] == 1
+    if len(traj["turn"]) > 0:       # multi-turn game
+        if traj["turn"][0]:  # play as O
+            return traj["reward"][-1] == 1
+        else:
+            return traj["reward"][-1] == -1
     else:
-        return traj["reward"][-1] == -1
+        return traj['reward'][-1] > 0
 
 
 def tie_rate(traj):
-    return traj["reward"][-1] == 0
+    if len(traj["turn"]) > 0:       # multi-turn game
+        return traj["reward"][-1] == 0
+    else:
+        return 0
 
 
 def lossrate(traj):
-    if traj["turn"][0]:  # play as O
-        return traj["reward"][-1] == -1
+    if len(traj["turn"]) > 0:       # multi-turn game
+        if traj["turn"][0]:  # play as O
+            return traj["reward"][-1] == -1
+        else:
+            return traj["reward"][-1] == 1
     else:
-        return traj["reward"][-1] == 1
+        return traj["reward"][-1] == 0
 
 
 def eval_episodes(data_path, verbose=True):
@@ -68,7 +81,7 @@ if __name__ == "__main__":
         data_dir = Path(args.data_dir)
 
         df_list = []
-        for i in count(1):
+        for i in count(0):
             dp = data_dir / f"replay_buffer_{i}.jsonl"
             if dp.exists():
                 data = eval_episodes(dp, verbose=args.verbose)

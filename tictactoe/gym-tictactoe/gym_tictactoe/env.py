@@ -122,7 +122,6 @@ class TicTacToeEnv(gym.Env):
 
     @staticmethod
     def state2str(state: List[int], show_number=True):
-        # XXX(ziyu): This method will not check the validity of the state
 
         ret_str = ""
         for j in range(0, 9, 3):

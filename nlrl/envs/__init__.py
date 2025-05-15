@@ -13,5 +13,7 @@ def get_env(env_config):
         return pyspiel.load_game(env_name, params)
     else:
         from .tictactoe.tictactoe import TicTacToeEnv_Wrapper
-        OTHER_ENV_DICT = {"TicTacToeEnv": TicTacToeEnv_Wrapper}
+        from .frozen_lake.frozenlake import FrozenLakeEnv_Wrapper
+        OTHER_ENV_DICT = {"TicTacToeEnv": TicTacToeEnv_Wrapper,
+                          "FrozenLakeEnv": FrozenLakeEnv_Wrapper,}
         return OTHER_ENV_DICT[env_config.env_name](env_config=env_config)

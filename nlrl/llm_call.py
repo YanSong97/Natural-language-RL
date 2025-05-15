@@ -87,10 +87,31 @@ class vllm_model:
         )
         self.prompt_format = functools.partial(prompt_format, tokenizer=self.tokenizer)
 
-    def generate(self, messages):
+    def generate(self, messages, **kwargs):
         # Batched generation
         prompts = [self.prompt_format(messages=d) for d in messages]
-        outputs = self.llm.generate(prompts, self.sampling_params)
+
+        if kwargs.get("vllm_generate_mini_bz", None) is not None:
+            # mini_bz = kwargs["vllm_generate_mini_bz"]
+            outputs = []
+            # Process in mini-batches
+            # for i in range(0, len(prompts), mini_bz):
+            #     batch_prompts = prompts[i:i + mini_bz]
+            #     batch_outputs = self.llm.generate(batch_prompts, self.sampling_params)
+            #     outputs.extend(batch_outputs)
+            #
+            # # Append responses to messages incrementally
+            # batch_messages = messages[i:i + mini_bz]
+            # for output, message in zip(batch_outputs, batch_messages):
+            #     generated_text = output.outputs[0].text
+            #     message.append({"role": "assistant", "content": generated_text})
+            for p in prompts:
+                output = self.llm.generate(p, self.sampling_params)
+                outputs.extend(output)
+
+        else:
+            outputs = self.llm.generate(prompts, self.sampling_params)
+
         for output, message in zip(outputs, messages):
             generated_text = output.outputs[0].text
             message.append({"role": "assistant", "content": generated_text})

@@ -25,3 +25,4 @@ tensorboard==2.18.0
 flax==0.10.2
 gymnasium==1.1.1
 gym==0.26.2
+omegaconf

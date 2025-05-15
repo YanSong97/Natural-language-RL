@@ -53,6 +53,7 @@ def offline_ray_vllm_infer(
                 model=model,
                 tensor_parallel_size=tensor_parallel_size,
                 disable_custom_all_reduce=True,
+                gpu_memory_utilization=0.9,
             )
 
         def __call__(self, batch: Dict[str, np.ndarray]) -> Dict[str, list]:
@@ -124,7 +125,6 @@ def offline_ray_vllm_infer(
     #     assert output["i"] == i, (output["i"], i)
     #     message.append({"role": "assistant", "content": generated_text})
 
-    # !!!(ziyu): for UNORDERED map of ray.data
     for output in outputs:
         idx = output["i"]
         generated_text = output["generated_text"]

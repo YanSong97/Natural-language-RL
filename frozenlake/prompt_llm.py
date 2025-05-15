@@ -3,13 +3,6 @@ from tqdm import tqdm
 import os
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-from nlrl.envs.tictactoe.prompt import (
-    MC_prompt,
-    MC_prompt_sa,
-    POLICY_prompt,
-    POLICY_IMPROVEMENT_prompt_sa,
-    EVAL_prompt_sa,
-)
 from nlrl.utils import read_jsonl, write_jsonl
 from nlrl.envs import get_env
 from nlrl.config import EnvConfig, LLMSamplingParams
@@ -49,6 +42,12 @@ def hash_s_a(state, action):
     str_act = f"act: {action}"
     return str_state + "\n" + str_act
 
+def hash_s_a_FL(state, action):
+    _str_state = state
+    _str_action = f"act: {action}"
+    s_a_key =  _str_state + "\n" + _str_action
+    return s_a_key
+
 
 def get_mc_prompt(args, replay_buffer):
     mc_prompt = (
@@ -67,21 +66,24 @@ def get_mc_prompt(args, replay_buffer):
         # so no action, no need to take MC
         for i_step in range(len(traj["state"]) - 1):
             # we only include experience if this is main-player's turn
-            if traj["turn"][i_step]:
-                # trunc_data = {
-                #     "state": traj["state"][i_step:],
-                #     "action": traj["action"][i_step:],
-                #     "reward": traj["reward"][i_step:],
-                # }
-                # trunc_traj.append(trunc_data)
-                s_a_key = hash_s_a(traj["state"][i_step], traj["action"][i_step])
+
+            if len(traj["turn"])>0:
+                # multi-turn game
+                if traj["turn"][i_step]:
+                    s_a_key = hash_s_a(traj["state"][i_step], traj["action"][i_step])
+                    state_trajs[s_a_key].append((i_buf, i_step))
+                    cnt += 1
+            else:
+                # single-turn game
+                s_a_key = hash_s_a_FL(traj["state"][i_step], traj['action'][i_step])
                 state_trajs[s_a_key].append((i_buf, i_step))
                 cnt += 1
+
 
     print("# Unique keys: {}, # State-Action pairs {}".format(len(state_trajs), cnt))
     print(args.n_mc_trajs)
 
-    def query_iter():
+    def query_iter(arg):
         for start_s_a, record_indices in state_trajs.items():
             trunc_trajs = []
             idx = 0
@@ -96,10 +98,19 @@ def get_mc_prompt(args, replay_buffer):
                     "reward": traj["reward"][i_s:],
                 }
                 trunc_trajs.append(trunc_data)
-                assert (
-                    hash_s_a(trunc_data["state"][0], trunc_data["action"][0])
-                    == start_s_a
-                )
+                if arg.env_name == "TicTacToeEnv":
+                    assert (
+                        hash_s_a(trunc_data["state"][0], trunc_data["action"][0])
+                        == start_s_a
+                    )
+                elif arg.env_name == "FrozenLakeEnv":
+                    assert (
+                            hash_s_a_FL(trunc_data["state"][0], trunc_data["action"][0])
+                            == start_s_a
+                    )
+                else:
+                    raise NotImplementedError
+
 
                 idx += 1
                 if len(trunc_trajs) == args.n_mc_trajs:
@@ -121,19 +132,9 @@ def get_mc_prompt(args, replay_buffer):
                 }
 
     # return query_iter
-    query = list(query_iter())
+    query = list(query_iter(args))
     return query
 
-    # query = list(map(mc_prompt, trunc_traj))
-    # query = [
-    #     {
-    #         "state": trunc_traj[idx]["state"][0],
-    #         "action": trunc_traj[idx]["action"][0],
-    #         "prompt": q,
-    #     }
-    #     for idx, q in enumerate(query)
-    # ]
-    # return query
 
 
 def get_policy_prompt(args, replay_buffer):
@@ -147,6 +148,7 @@ def get_policy_prompt(args, replay_buffer):
 
 
 def build_action_sampler(args):
+    env_config = EnvConfig(env_name=args.env_name)
     if args.num_policy_sample is None or args.num_policy_sample <= 0:
         print("use all valid state-action pairs")
 
@@ -179,14 +181,28 @@ def build_action_sampler(args):
             from nlrl.policy.llm_policy import Agent
 
             agent = Agent(
-                args.policy_model_path, policy_llm_config, model_tp_size=1, 
+                args.policy_model_path, policy_llm_config, model_tp_size=1,
                 remote=True,
-                epsilon_greedy=args.eps_random_action
+                epsilon_greedy=args.eps_random_action,
+                env_config=env_config,
             )
             all_board_inputs = []
             for board in boards:
                 all_board_inputs.extend([board for _ in range(args.num_policy_sample)])
-            all_next_actions = agent.get_batch_action(all_board_inputs)
+
+            if args.env_name=="TicTacToeEnv":
+                available_actions_list = [
+                    [i for i in range(9) if state[0][i] == 0] for state in all_board_inputs
+                ]
+            elif args.env_name=="FrozenLakeEnv":
+                available_actions_list = [[0, 1, 2, 3] for state in all_board_inputs]
+
+            elif args.env_name=="SokobanEnv":
+                available_actions_list = [[0, 1, 2, 3] for state in all_board_inputs]
+            else:
+                raise NotImplementedError
+
+            all_next_actions = agent.get_batch_action(all_board_inputs, available_actions_list=available_actions_list)
 
             next_states_all = []
             indices = [0]
@@ -226,8 +242,13 @@ def get_policy_improvement_prompt(
         for traj in replay_buffer:
             # The final one is the terminal state
             for i in range(len(traj["state"]) - 1):
-                if traj["turn"][i]:
+                if len(traj["turn"]) > 0:       # multi-turn
+                    if traj["turn"][i]:
+                        boards.append(traj["state"][i])
+                else:
                     boards.append(traj["state"][i])
+
+
     # boards = boards[:5]
 
     next_states_all, indices = action_sampler(boards)
@@ -318,9 +339,7 @@ def main(args):
         max_tokens=args.max_tokens,
         n=args.num_samples,
     )
-    # print("Loading LLM model")
-    # llm = vllm_model(args.model_path, SamplingParams)
-    # print("LLM model loaded")
+
 
     # # Run batch generation and write results
     # responses = batch_generate(query, llm, args)
@@ -381,7 +400,7 @@ if __name__ == "__main__":
         "--policy_model_path", type=str
     )
     parser.add_argument("--num_policy_sample", type=int, default=None)
-    parser.add_argument("--max_use_action", type=int, default=2, 
+    parser.add_argument("--max_use_action", type=int, default=2,
                         help="top k actions sampled by the policy used in policy improvement")
     parser.add_argument("--eps_random_action", type=float, default=None,
                         help="probability when propose all available actions during policy improvement")
@@ -395,4 +414,31 @@ if __name__ == "__main__":
 
     parser.add_argument("--env_name", type=str, default="TicTacToeEnv")
     args = parser.parse_args()
+    if args.env_name=='TicTacTieEnv':
+        from nlrl.envs.tictactoe.prompt import (
+            MC_prompt,
+            MC_prompt_sa,
+            POLICY_prompt,
+            POLICY_IMPROVEMENT_prompt_sa,
+            EVAL_prompt_sa,
+        )
+    elif args.env_name=="FrozenLakeEnv":
+        from nlrl.envs.frozen_lake.prompt import (
+            MC_prompt,
+            MC_prompt_sa,
+            POLICY_prompt,
+            POLICY_IMPROVEMENT_prompt_sa,
+            EVAL_prompt_sa,
+        )
+    elif args.env_name=="SokobanEnv":
+        from nlrl.envs.sokoban.prompt import (
+            MC_prompt,
+            MC_prompt_sa,
+            POLICY_prompt,
+            POLICY_IMPROVEMENT_prompt_sa,
+            EVAL_prompt_sa,
+        )
+    else:
+        raise NotImplementedError
+
     main(args)
