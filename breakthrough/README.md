@@ -5,12 +5,11 @@ Experiments exploring leverage language TD to improve LLM capability analyzing t
 ## Environment
 We forked the original [Openspiel](https://github.com/google-deepmind/open_spiel) and modified the environment so the 5x5 breakthrough board can have two lines of pawns.
 ```bash
-git clone https://github.com/waterhorse1/open_spiel
 cd open_spiel
 pip3 install -e .
 ```
 ## Dataset
-The training and test set is open-sourced at https://huggingface.co/datasets/Waterhorse/Breakthrough_dataset.
+The training and test set is open-sourced at [TBD].
 
 We also open-source our data collection scripts. Specifically, :
 * Run rollout with different policy combinations, to collect initial states
