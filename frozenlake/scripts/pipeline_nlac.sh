@@ -2,7 +2,7 @@
 set -ex
 export PYTHONPATH="$PWD:$PYTHONPATH"
 
-# export CUDA_VISIBLE_DEVICES=4,5,6,7
+ENV_NAME=${11}
 TOP_K_SAMPLE=$1
 NUM_POLICY_SAMPLE=${2:-10}
 N_MC_TRAJ=${3:-5}
@@ -10,8 +10,11 @@ NUM_ROLLOUTS=${4:-512}
 OPPONENT_POLICY_NAME=${5:-"None"}
 NUM_TRAIN_EPOCH=${6:-2}
 NUM_HISTORY=${7:-3}
-EXP_BASE_DIR=./results-frozenlake-nlrl/${8:-"exp"}
+EXP_BASE_DIR=./results-${ENV_NAME}-nlrl/${8:-"exp"}
 exp_dir="${EXP_BASE_DIR}/oppo_${OPPONENT_POLICY_NAME}_train_${NUM_TRAIN_EPOCH}_hist_${NUM_HISTORY}_sample_${NUM_POLICY_SAMPLE}_top_${TOP_K_SAMPLE}_nmc_${N_MC_TRAJ}_rollout_${NUM_ROLLOUTS}"
+
+ENV_NUM=64
+#MINI_ROLLOUT_BZ=2
 
 # Base paths
 BASE_POLICY_MODEL_PATH="${exp_dir}/models/policy"
@@ -50,7 +53,17 @@ do
         POLICY_TRAIN_START=None
         VALUE_TRAIN_START=None
         EVAL_TRAJ_PATH="${BASE_EVAL_TRAJ_PATH}_0.jsonl"
-        python3 frozenlake/collect_rollout_data.py --policy_name "LLM" --opponent_policy_name $OPPONENT_POLICY_NAME --replay_buffer_path $EVAL_TRAJ_PATH --rollout_method scratch --num_rollouts $NUM_ROLLOUTS --model_path $ROLLOUT_POLICY_MODEL_PATH --epsilon_greedy 0 --temp 0
+        python3 frozenlake/collect_rollout_data.py \
+                --env_name $ENV_NAME --policy_name "LLM" \
+                --opponent_policy_name $OPPONENT_POLICY_NAME \
+                --replay_buffer_path $EVAL_TRAJ_PATH \
+                --rollout_method scratch \
+                --num_rollouts $NUM_ROLLOUTS \
+                --env_parallel_num $ENV_NUM \
+                --model_path $ROLLOUT_POLICY_MODEL_PATH \
+                --epsilon_greedy 0 \
+                --temp 0 \
+#                --generate_mini_bz $MINI_ROLLOUT_BZ
     else
         OLD_POLICY_MODEL_PATH="${BASE_POLICY_MODEL_PATH}_$(($i-1))"
         OLD_VALUE_MODEL_PATH="${BASE_VALUE_MODEL_PATH}_$(($i-1))"
@@ -72,11 +85,20 @@ do
     IMPROVE_TARGET_PATH="${BASE_IMPROVE_TARGET_PATH}_${i}.jsonl"
     IMPROVE_TRAIN_PATH="${BASE_IMPROVE_TARGET_PATH}_for_train_${i}.jsonl"
     # Run rollout
-    python3 frozenlake/collect_rollout_data.py --policy_name $POLICY_NAME --opponent_policy_name $OPPONENT_POLICY_NAME --replay_buffer_path $REPLY_BUFFER_PATH --rollout_method scratch --num_rollouts $NUM_ROLLOUTS --model_path $ROLLOUT_POLICY_MODEL_PATH
+    python3 frozenlake/collect_rollout_data.py \
+              --env_name $ENV_NAME \
+              --policy_name $POLICY_NAME \
+              --opponent_policy_name $OPPONENT_POLICY_NAME \
+              --replay_buffer_path $REPLY_BUFFER_PATH \
+              --rollout_method scratch \
+              --num_rollouts $NUM_ROLLOUTS \
+              --env_parallel_num $ENV_NUM \
+              --model_path $ROLLOUT_POLICY_MODEL_PATH \
+#              --generate_mini_bz $MINI_ROLLOUT_BZ
     # Run MC prompt
-    python3 frozenlake/prompt_llm.py --method mc_value_q --max_tokens=1024 --model_path $BIG_LLM_NAME --batch_size $BATCH_SIZE --input_path $REPLY_BUFFER_PATH --output_path $Q_TARGET_PATH --n_mc_trajs $N_MC_TRAJ
+    python3 frozenlake/prompt_llm.py --env_name $ENV_NAME --method mc_value_q --max_tokens=1024 --model_path $BIG_LLM_NAME --batch_size $BATCH_SIZE --input_path $REPLY_BUFFER_PATH --output_path $Q_TARGET_PATH --n_mc_trajs $N_MC_TRAJ
     # Run format transfer
-    python3 frozenlake/data_for_train.py --data_path $Q_TARGET_PATH --output_path $Q_TRAIN_PATH --method mc_value_q
+    python3 frozenlake/data_for_train.py --env_name $ENV_NAME --data_path $Q_TARGET_PATH --output_path $Q_TRAIN_PATH --method mc_value_q
 
     # Iterate to generate all possible boards
     Q_TRAIN_PATH_MERGE="${BASE_Q_TARGET_PATH}_for_train_merged.jsonl"
@@ -107,19 +129,19 @@ do
         --eval_steps 0.1 \
         --per_device_eval_batch_size 8 \
         --fsdp "full_shard auto_wrap" \
-        --fsdp_transformer_layer_cls_to_wrap LlamaDecoderLayer \
-        --checkpoint_path $VALUE_TRAIN_START
+        --checkpoint_path $VALUE_TRAIN_START \
+        --fsdp_transformer_layer_cls_to_wrap LlamaDecoderLayer
+#        --fsdp_transformer_layer_cls_to_wrap LlamaDecoderLayer \
 
     VALUE_CHECKPOINT=$(find $VALUE_MODEL_PATH -type d -name 'checkpoint*' | sort | head -n 1)
     rm -rf ${VALUE_CHECKPOINT}/rng*
     rm -rf ${VALUE_CHECKPOINT}/train*
     # run improvement
-    python3 frozenlake/prompt_llm.py --method improve --max_tokens=1024 --model_path $BIG_LLM_NAME --batch_size $BATCH_SIZE --input_path $REPLY_BUFFER_PATH --output_path $IMPROVE_TARGET_PATH --value_model_path $VALUE_CHECKPOINT --policy_model_path $ROLLOUT_POLICY_MODEL_PATH --num_policy_sample $NUM_POLICY_SAMPLE --max_use_action $TOP_K_SAMPLE
-    python3 frozenlake/data_for_train.py --data_path $IMPROVE_TARGET_PATH --output_path $IMPROVE_TRAIN_PATH --method improve
+    python3 frozenlake/prompt_llm.py --env_name $ENV_NAME --method improve --max_tokens=1024 --model_path $BIG_LLM_NAME --batch_size $BATCH_SIZE --input_path $REPLY_BUFFER_PATH --output_path $IMPROVE_TARGET_PATH --value_model_path $VALUE_CHECKPOINT --policy_model_path $ROLLOUT_POLICY_MODEL_PATH --num_policy_sample $NUM_POLICY_SAMPLE --max_use_action $TOP_K_SAMPLE
+    python3 frozenlake/data_for_train.py --env_name $ENV_NAME --data_path $IMPROVE_TARGET_PATH --output_path $IMPROVE_TRAIN_PATH --method improve
     torchrun --nproc_per_node=4 --master_port=20002 frozenlake/train/train_sft.py \
         --model_name_or_path=$SMALL_LLM_NAME \
         --train_dataset_path=$IMPROVE_TRAIN_PATH \
-        --max_seq_length=1024 \
         --eval_dataset_path=None \
         --report_to="tensorboard" \
         --learning_rate=1e-5 \
@@ -142,8 +164,8 @@ do
         --eval_steps 0.1 \
         --per_device_eval_batch_size 8 \
         --fsdp "full_shard auto_wrap" \
-        --fsdp_transformer_layer_cls_to_wrap LlamaDecoderLayer \
-        --checkpoint_path $POLICY_TRAIN_START
+        --checkpoint_path $POLICY_TRAIN_START \
+        --fsdp_transformer_layer_cls_to_wrap LlamaDecoderLayer
 
     POLICY_CHECKPOINT=$(find $POLICY_MODEL_PATH -type d -name 'checkpoint*' | sort | head -n 1)
     rm -rf ${POLICY_CHECKPOINT}/rng*
@@ -154,7 +176,19 @@ do
         rm -rf ${BASE_POLICY_MODEL_PATH}_$(($i-1))/checkpoint*
         rm -rf ${BASE_VALUE_MODEL_PATH}_$(($i-1))/checkpoint*
     fi
-    python3 frozenlake/collect_rollout_data.py --policy_name $POLICY_NAME --opponent_policy_name $OPPONENT_POLICY_NAME --replay_buffer_path $EVAL_TRAJ_PATH --rollout_method scratch --num_rollouts $NUM_ROLLOUTS --model_path $POLICY_CHECKPOINT --epsilon_greedy 0 --temp 0
+    python3 frozenlake/collect_rollout_data.py \
+            --env_name $ENV_NAME \
+            --policy_name $POLICY_NAME \
+            --opponent_policy_name $OPPONENT_POLICY_NAME \
+            --replay_buffer_path $EVAL_TRAJ_PATH \
+            --rollout_method scratch \
+            --num_rollouts $NUM_ROLLOUTS \
+            --env_parallel_num $ENV_NUM \
+            --model_path $POLICY_CHECKPOINT \
+            --epsilon_greedy 0 \
+            --temp 0 \
+#            --generate_mini_bz $MINI_ROLLOUT_BZ
+
     python nlrl/evaluate.py --data_dir ${exp_dir}/data/eval
 done
 
@@ -163,7 +197,16 @@ ROLLOUT_POLICY_MODEL_PATH=$POLICY_CHECKPOINT
 POLICY_NAME="LLM"
 calculated_value=$((FINAL_ITERATION_NUM + 1))
 REPLY_BUFFER_PATH="${BASE_REPLAY_BUFFER_PATH}_${calculated_value}.jsonl"
-python3 frozenlake/collect_rollout_data.py --policy_name $POLICY_NAME --opponent_policy_name $OPPONENT_POLICY_NAME --replay_buffer_path $REPLY_BUFFER_PATH --rollout_method scratch --num_rollouts $NUM_ROLLOUTS --model_path $ROLLOUT_POLICY_MODEL_PATH
+python3 frozenlake/collect_rollout_data.py \
+        --env_name $ENV_NAME \
+        --policy_name $POLICY_NAME \
+        --opponent_policy_name $OPPONENT_POLICY_NAME \
+        --replay_buffer_path $REPLY_BUFFER_PATH \
+        --rollout_method scratch \
+        --num_rollouts $NUM_ROLLOUTS \
+        --env_parallel_num $ENV_NUM \
+        --model_path $ROLLOUT_POLICY_MODEL_PATH \
+#        --generate_mini_bz $MINI_ROLLOUT_BZ
 
 # remove extra results
 rm $POLICY_CHECKPOINT/optimizer.bin
